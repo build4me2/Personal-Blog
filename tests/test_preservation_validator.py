@@ -539,7 +539,7 @@ class RenderedPreservationTests(unittest.TestCase):
     @staticmethod
     def _write_smoke_fixture(destination: Path) -> dict[str, object]:
         route = "/established-route/"
-        home_html = """<html><body><header class="header"><nav class="header-nav"></nav><button id="theme-toggle" class="theme-toggle"></button></header><main><header class="page-header"></header><ul class="paper-list"><li class="paper-list-item"><a href="/established-route/">Established title</a><span class="paper-list-date">Jan 2, 2026</span></li></ul></main><footer class="footer site-footer"></footer></body></html>"""
+        home_html = """<html><body><header class="header"><nav class="header-nav"></nav><button id="theme-toggle" class="theme-toggle"></button></header><main><header class="page-header"></header><ul class="paper-list"><li class="paper-list-item"><a href="/Personal-Blog/established-route/">Established title</a><span class="paper-list-date">Jan 2, 2026</span></li></ul></main><footer class="footer site-footer"></footer></body></html>"""
         article_html = """<html><body><header class="header"><nav class="header-nav"></nav><button id="theme-toggle" class="theme-toggle"></button></header><main><article class="post-single"><header class="post-header"><h1 class="post-title entry-hint-parent">Established title</h1></header><div class="post-content md-content">Established prose.</div></article></main><footer class="footer site-footer"></footer></body></html>"""
         article_path = destination / route.strip("/") / "index.html"
         article_path.parent.mkdir(parents=True)
@@ -624,6 +624,29 @@ class RenderedPreservationTests(unittest.TestCase):
             self.assertIn(
                 "home listing presence, title, date, or established post ordering changed", errors
             )
+
+    def test_listing_prefix_is_required_not_blindly_stripped(self) -> None:
+        for href in (
+            "/established-route/",
+            "https://build4me2.github.io/established-route/",
+            "https://wrong.example/Personal-Blog/established-route/",
+            "/Other-Blog/established-route/",
+            "/Personal-Blogger/established-route/",
+            "/Personal-Blog/established-route/?wrong=1",
+            "/Personal-Blog/established-route/#wrong",
+        ):
+            with self.subTest(href=href), tempfile.TemporaryDirectory() as temporary:
+                destination = Path(temporary)
+                baseline = self._write_smoke_fixture(destination)
+                home = destination / "index.html"
+                home.write_text(home.read_text().replace(
+                    'href="/Personal-Blog/established-route/"', f'href="{href}"'
+                ), encoding="utf-8")
+                errors: list[str] = []
+                validator.validate_rendered(baseline, destination, errors)
+                self.assertIn(
+                    "home listing presence, title, date, or established post ordering changed", errors
+                )
 
     def test_empty_rendered_pages_are_rejected_explicitly(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

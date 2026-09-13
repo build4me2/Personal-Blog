@@ -16,7 +16,6 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-import urllib.parse
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -27,11 +26,18 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 import build_site as deterministic_build
+import verify_built_routes as built_routes
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = ROOT / "tests" / "baselines" / "preservation.json"
 REVIEW_RECORDS_PATH = ROOT / "tests" / "baselines" / "review-records.json"
 CAPTURED_FROM_COMMIT = "8daa5220b19ec7e529d4354c77707bb882c9bce3"
+# One user-approved deployment migration (00cca67), not a config rebaseline.
+# The original whole-file digest gates the exception; all other bytes stay exact.
+PRE_MIGRATION_CONFIG_SHA256 = "a9d61d10a4335f70f07a0aa297499f43bb804e2cfd2cb33b86fec646f4ba0396"
+PRE_MIGRATION_BASE_URL = "https://build4me2.github.io/"
+PRE_MIGRATION_BASE_LINE = f"baseURL = '{PRE_MIGRATION_BASE_URL}'\n".encode()
+DEPLOYMENT_BASE_LINE = f"baseURL = '{built_routes.DEPLOYMENT_BASE_URL}'\n".encode()
 PINNED_HUGO_VERSION = deterministic_build.PINNED_HUGO_VERSION
 PINNED_PAPERMOD_COMMIT = "154d006e0182dfc7da38008323976b02e6bfab4a"
 HUGO_VERSION_FILE = Path(".hugo-version")
@@ -50,6 +56,21 @@ def digest(data: bytes | str) -> str:
     if isinstance(data, str):
         data = data.encode("utf-8")
     return hashlib.sha256(data).hexdigest()
+
+
+def approved_config_migration(historical: bytes) -> bytes:
+    """Apply only the reviewed baseURL line to the exact captured config."""
+    if digest(historical) == PRE_MIGRATION_CONFIG_SHA256:
+        return historical.replace(PRE_MIGRATION_BASE_LINE, DEPLOYMENT_BASE_LINE, 1)
+    return historical
+
+
+def preserved_config_digest(current: bytes) -> str:
+    """Compare migrated bytes with the unchanged inventory, without masking drift."""
+    original = current.replace(DEPLOYMENT_BASE_LINE, PRE_MIGRATION_BASE_LINE, 1)
+    if digest(original) == PRE_MIGRATION_CONFIG_SHA256:
+        return PRE_MIGRATION_CONFIG_SHA256
+    return digest(current)
 
 
 def normalized_text(value: str) -> str:
@@ -166,7 +187,9 @@ class PageParser(html.parser.HTMLParser):
             self.content_links.append(attrs.get("href", ""))
         if self.current_listing is not None and tag == "a":
             href = attrs.get("href", "")
-            self.current_listing["route"] = urllib.parse.urlsplit(href).path
+            self.current_listing["route"] = (
+                built_routes.site_route(href, built_routes.deployed_url("/")) or ""
+            )
 
     def handle_endtag(self, tag: str) -> None:
         if not self.stack:
@@ -826,7 +849,9 @@ def validate_preservation_history(
                 fail(errors, f"protected presentation differs from captured history: {relative}")
 
     historical_config = captured_file(presentation_captured, "hugo.toml", errors)
-    if historical_config is not None and (ROOT / "hugo.toml").read_bytes() != historical_config:
+    if historical_config is not None and (
+        (ROOT / "hugo.toml").read_bytes() != approved_config_migration(historical_config)
+    ):
         fail(errors, "Hugo configuration differs from captured history")
 
     gitlink = subprocess.run(
@@ -945,8 +970,13 @@ def validate_sources(baseline: dict[str, Any], errors: list[str]) -> bool:
         path = ROOT / relative
         if not path.is_file():
             fail(errors, f"protected file missing: {relative}")
-        elif digest(path.read_bytes()) != expected:
-            fail(errors, f"protected presentation/configuration changed: {relative}")
+        else:
+            actual = (
+                preserved_config_digest(path.read_bytes())
+                if relative == "hugo.toml" else digest(path.read_bytes())
+            )
+            if actual != expected:
+                fail(errors, f"protected presentation/configuration changed: {relative}")
 
     theme_ready = validate_theme_checkout(baseline["paperModCommit"], errors)
 
@@ -956,6 +986,8 @@ def validate_sources(baseline: dict[str, Any], errors: list[str]) -> bool:
         fail(errors, f"Hugo configuration cannot be read: {type(exc).__name__}")
         config = {}
     for dotted, expected in baseline["hugoConfiguration"].items():
+        if dotted == "baseURL" and expected == PRE_MIGRATION_BASE_URL:
+            expected = built_routes.DEPLOYMENT_BASE_URL
         value: Any = config
         missing = False
         for component in dotted.split("."):

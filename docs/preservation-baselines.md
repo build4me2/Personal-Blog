@@ -65,15 +65,70 @@ Extended-capability mismatch. Initialize the pinned theme first. The validator c
 - the established articles' presence and relative order on the home page;
 - canonical rendered element structure for the home and article pages;
 - complete, sorted file inventories and hashes for local layouts and the entire project `assets/` tree, including header, footer, listing, citation, theme-toggle, core/common CSS, and JavaScript overrides (new asset or layout files are rejected);
-- the exact Hugo Extended version, behavior-relevant Hugo settings (including `defaultTheme = "auto"`), and the PaperMod gitlink commit.
+- the exact Hugo Extended version, behavior-relevant Hugo settings (including the reviewed `defaultTheme = "dark"`), and the PaperMod gitlink commit.
 
-The validator checks the baseline schema before reading any fixture values. Missing fields, incorrect JSON types, malformed hashes, and an incorrect established-entry count fail with sorted JSON-path diagnostics and no traceback. Merely retaining four array entries is insufficient: article source paths, titles, slugs, and routes must be unique, home routes must be unique, and the home routes must map one-to-one to the article routes. The canonical identity tuples are independently derived from every established post in the pinned `capturedFrom` Git tree, so duplicating one entry to hide an omission or substitution cannot rebaseline the identity set. It then fails with a focused diagnostic when any protected value changes. Rewriting the editable baseline alongside a change does not bypass preservation: article front matter and derived routes/listing are reconstructed from `capturedFrom`, while Hugo configuration, presentation bytes and inventories, and the PaperMod gitlink are compared directly with that captured Git tree. It does not access the network and uses only Python's standard library, Git, and the locally installed Hugo executable.
+The validator checks the baseline schema before reading any fixture values. Missing fields, incorrect JSON types, malformed hashes, and an incorrect established-entry count fail with sorted JSON-path diagnostics and no traceback. Merely retaining four array entries is insufficient: article source paths, titles, slugs, and routes must be unique, home routes must be unique, and the home routes must map one-to-one to the article routes. The canonical identity tuples are independently derived from every established post in the pinned `capturedFrom` Git tree, so duplicating one entry to hide an omission or substitution cannot rebaseline the identity set. It then fails with a focused diagnostic when any protected value changes. Rewriting the editable baseline alongside a change does not bypass preservation: article front matter and derived routes/listing are reconstructed from `capturedFrom`, while Hugo configuration, presentation bytes and inventories, and the PaperMod gitlink are compared with the reviewed `presentationCapturedFrom` Git tree. The only configuration exception is the exact approved deployment migration documented below. It does not access the network and uses only Python's standard library, Git, and the locally installed Hugo executable.
 
 The real preservation render calls the same `scripts/build_site.py` build function
 used for deployment. Consequently its fixed clock, `--buildFuture`, production
 environment, fresh isolated cache, `--ignoreCache`, `SOURCE_DATE_EPOCH`, UTC
 timezone, and fixed locale cannot drift into a second validator-specific command.
 Command-capture tests enforce that shared contract.
+
+## Approved Personal-Blog deployment baseURL migration
+
+The user explicitly approved repairing preservation validation for the project
+Pages deployment, without disabling safeguards. Commit
+`00cca67fc70865897f3cbeaf6e41e33dd1e64bc3` already makes the sole approved
+`hugo.toml` change:
+
+```diff
+-baseURL = 'https://build4me2.github.io/'
++baseURL = 'https://build4me2.github.io/Personal-Blog/'
+```
+
+The former root deployment emitted stylesheet URLs outside the project's Pages
+mount, causing CSS 404s. This approval authorizes only that exact line change,
+not a general configuration reconciliation mechanism or a new design baseline.
+`capturedFrom` remains immutable at
+`8daa5220b19ec7e529d4354c77707bb882c9bce3`; `presentationCapturedFrom`, review
+records, and all baseline values (including the historical baseURL and config
+hash) remain unchanged.
+
+`validate_preservation_baseline.py` gates the migration on the original complete
+config SHA-256
+`a9d61d10a4335f70f07a0aa297499f43bb804e2cfd2cb33b86fec646f4ba0396`.
+The protected-file check recognizes the migrated bytes only when reversing the
+exact line restores that digest. The independent Git-history check applies the
+same exact forward migration to the captured bytes and requires byte equality.
+The setting check requires the approved new baseURL, so a rollback to the old
+root URL also fails. Every other config byte, including settings outside the
+dotted-settings inventory, remains protected even if editable hashes/settings
+are rewritten. No content, citation, theme, template, CSS, layout, or build pin
+exception is introduced.
+
+Established baseline routes remain site-relative identities (`/<slug>/`), and
+Hugo still writes `<slug>/index.html` within the artifact. Both rendered listing
+and deployment-route validation resolve browser URLs against the approved
+`https://build4me2.github.io/Personal-Blog/` mount before comparing those
+identities. They require the exact origin and prefix boundary: old root links,
+wrong hosts, wrong prefixes, and query/fragment substitutions cannot satisfy an
+established listing entry. They do not blindly remove a path component.
+`verify_built_routes.py` also requires local stylesheet links on home and every
+established article and maps each URL within that mount to a nonempty `.css`
+file inside the artifact. Only the exact existing Google Fonts stylesheet URL
+from the protected `layouts/partials/extend_head.html` is exempt from local file
+mapping; it cannot substitute for the built theme CSS. No network or live
+deployment is needed.
+
+Regression coverage lives in `tests/test_base_url_migration.py`,
+`tests/test_preservation_validator.py`, and `tests/test_built_routes.py`.
+It covers the unchanged captured inventory, approved migration, rejected root
+rollback/other baseURLs, unrelated config mutations (also with rewritten
+baselines), prefixed listing URLs, and missing/empty/out-of-mount CSS. A real
+pinned Hugo build checks stylesheet URLs and all four prefixed article links.
+Validate this migration with `make setup`, `make validate`, `make reproducible`,
+`make build`, and `make verify-routes`; none of these pushes or deploys the site.
 
 ## Change policy
 
@@ -91,6 +146,6 @@ Before changing a citation destination, add a `citation-reconciliation` entry to
 5. a non-whitespace `reason` and `verificationEvidence` array;
 6. `proseArgumentRoutePresentationUnchanged: true`.
 
-For an approved front-matter correction, use a `front-matter-reconciliation` entry with the same `id`, `article`, `reason`, `verificationEvidence`, and unchanged-invariant flag, plus `field` and exact scalar `before` and `after` values. The only reconcilable fields are `date`, `draft`, `hideSummary`, and `ShowToc`; established titles and slugs/routes remain identities and cannot be reconciled. A date correction must also be reflected in the home-listing baseline derived from it. Presentation and Hugo configuration changes are prohibited and have no reconciliation record type.
+For an approved front-matter correction, use a `front-matter-reconciliation` entry with the same `id`, `article`, `reason`, `verificationEvidence`, and unchanged-invariant flag, plus `field` and exact scalar `before` and `after` values. The only reconcilable fields are `date`, `draft`, `hideSummary`, and `ShowToc`; established titles and slugs/routes remain identities and cannot be reconciled. A date correction must also be reflected in the home-listing baseline derived from it. Unreviewed presentation and Hugo configuration changes remain prohibited. The existing `presentation-migration` record anchors the reviewed design; the single approved baseURL exception above does not authorize any further configuration or presentation change.
 
 Then update only the affected source and fixture values in `preservation.json`, run the full validator, and include the post, review record, and baseline in review. Each changed value must consume an exact matching record; stale, duplicate, non-matching, or unknown-article records fail validation. Prose is compared directly with the inherited `capturedFrom` source after only hyperlink destinations are masked, so rebaselining hashes cannot authorize changed wording or arguments. Never update baseline hashes to make an unexplained content or design change pass. The initial record identifies the inherited commit used for this inventory and approves no changes.
